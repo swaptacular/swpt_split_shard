@@ -1,5 +1,4 @@
-# Dockerfile
-FROM alpine:3.22.1
+FROM alpine:3.22.1 AS app-image
 
 ARG TARGETARCH
 

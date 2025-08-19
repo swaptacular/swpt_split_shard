@@ -56,15 +56,17 @@ EOF
     done
 }
 
-function create_git_working_copy {
-    # Initialize the shared directory if necessary
-    if [ -z "$( ls -A ${SHARED_DIRECTORY})" ]; then
+function init_working_directory {
+    echo 'Initializing the working directory ...'
+    pushd . > /dev/null
+
+    if [ -z "$( ls -A ${WORKING_DIRECTORY})" ]; then
       GIT_REPOSITORY="ssh://git@${GIT_SERVER}:${GIT_PORT}${GIT_REPOSITORY_PATH}"
       ssh-keyscan -p "${GIT_PORT}" -t rsa "${GIT_SERVER}" > /etc/ssh/ssh_known_hosts
-      git clone "${GIT_REPOSITORY}" "${SHARED_DIRECTORY}"
-      cp -n /etc/ssh/ssh_known_hosts "${SHARED_DIRECTORY}/.ssh_known_hosts"
+      git clone "${GIT_REPOSITORY}" "${WORKING_DIRECTORY}"
+      cp -n /etc/ssh/ssh_known_hosts "${WORKING_DIRECTORY}/.ssh_known_hosts"
     fi
-    cd "${SHARED_DIRECTORY}"
+    cd "${WORKING_DIRECTORY}"
 
     # Ensure ".ssh_known_hosts" and "/etc/ssh/ssh_known_hosts" files exist
     if ! [ -e .ssh_known_hosts ]; then
@@ -72,19 +74,39 @@ function create_git_working_copy {
     fi
     cp -n .ssh_known_hosts /etc/ssh/ssh_known_hosts
 
-    # Ensure a symlink to "${OVERLAY_SUBDIR}" exists
-    if ! [ -e .overlay ]; then
-      ln -ns "${OVERLAY_SUBDIR}" .overlay
-    fi
+    popd > /dev/null
 }
 
-function add_phase2_job {
-    # This loop periodically pulls the Git repository
-    while true; do
-      git pull --ff-only
+function git_reset_and_pull {
+    echo 'Resetting the working directory ...'
+    pushd . > /dev/null
+    cd "${WORKING_DIRECTORY}"
+    git restore --staged --worktree .
+    git reset --hard origin/master
+    echo 'Pulling from origin/master ...'
+    git pull --ff-only
+    popd > /dev/null
+}
 
-      # Seep for $GIT_PULL_SECONDS seconds (60 by default)
-      sleep "${GIT_PULL_SECONDS-60}"
+function schedule_phase2_job {
+    init_working_directory
+
+    # This loop periodically tries to push a new commit to the Git-ops
+    # repository.
+    while true; do
+        git_reset_and_pull
+
+        # TODO: Edit the files here!
+        cd "${WORKING_DIRECTORY}/$SHARD_SUBDIR"
+
+        git add -A
+        git commit -m 'A commit message'
+        if git push; then
+            break
+        fi
+        sleep_seconds=$((RANDOM / 1000))
+        echo "Will try again in $sleep_seconds seconds ..."
+        sleep $sleep_seconds
     done
 }
 
@@ -97,7 +119,7 @@ case $1 in
         match_sentinel "$SHARD1_DB_HOST" 1 "$SHARD_DB_HOST"
 
         # Make a commit to the GitOps repository.
-        # TODO: add_phase2_job
+        schedule_phase2_job
         ;;
     *)
         exec "$@"

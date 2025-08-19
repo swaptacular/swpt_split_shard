@@ -98,7 +98,7 @@ function schedule_phase2_job {
     while true; do
         git_reset_and_pull
 
-        # Use the "splitting-phase-2-job.yaml" resource (the next
+        # Use the "splitting-phase-2-job.yaml" resource (the scheduled
         # job), instead of the "splitting-phase-1-job.yaml" resource
         # (the currently executing job).
         job_selector='.resources[] | select(. == "*/splitting-phase-1-job.yaml")'
@@ -119,7 +119,7 @@ function schedule_phase2_job {
         yq -i ".replicas += [{\"name\": \"$DRAINER_TASK_NAME\", \"count\": $consumers_count}]" kustomization.yaml
 
         git add -A
-        git commit -m 'A commit message'
+        git commit -m "SPLIT: Trigger phase 2 for $SHARD_SUBDIR"
         if git push; then
             break
         fi

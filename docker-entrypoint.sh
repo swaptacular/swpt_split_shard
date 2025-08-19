@@ -90,20 +90,41 @@ function git_reset_and_pull {
 
 function schedule_phase2_job {
     init_working_directory
+    cd "${WORKING_DIRECTORY}/$SHARD_SUBDIR"
 
     # This loop periodically tries to push a new commit to the Git-ops
     # repository.
+    #
     while true; do
         git_reset_and_pull
 
-        # TODO: Edit the files here!
-        cd "${WORKING_DIRECTORY}/$SHARD_SUBDIR"
+        # Use the "splitting-phase-2-job.yaml" resource (the next
+        # job), instead of the "splitting-phase-1-job.yaml" resource
+        # (the currently executing job).
+        job_selector='.resources[] | select(. == "*/splitting-phase-1-job.yaml")'
+        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
+            echo 'ERROR: Can not locate the "splitting-phase-1-job.yaml" resource!'\
+                 'Most probably, the splitting of this shard has been manually canceled.'
+            exit 1
+        fi
+        phase1_job="$(yq "... comments=\"\" | $job_selector" kustomization.yaml)"
+        phase2_job="$(echo "$phase1_job" | sed s/1-job.yaml$/2-job.yaml/)"
+        yq -i "with($job_selector; . = \"$phase2_job\")" kustomization.yaml
+
+        # Do not start parent shard's processes. Leave only the
+        # drainer process.
+        consumers_count=$(yq "... comments=\"\" | .replicas[] | select(.name == \"${CONSUMER_TASK_NAME}\") .count" kustomization.yaml)
+        yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
+        yq -i '.replicas[] |= (.count = 0)' kustomization.yaml
+        yq -i ".replicas += [{\"name\": \"$DRAINER_TASK_NAME\", \"count\": $consumers_count}]" kustomization.yaml
 
         git add -A
         git commit -m 'A commit message'
         if git push; then
             break
         fi
+
+        # Sleep for a random interval between 0 and 32 seconds.
         sleep_seconds=$((RANDOM / 1000))
         echo "Will try again in $sleep_seconds seconds ..."
         sleep $sleep_seconds

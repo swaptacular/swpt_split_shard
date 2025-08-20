@@ -34,7 +34,7 @@ DO UPDATE SET value=EXCLUDED.value;
 
 SELECT '$set_record' FROM pg_switch_wal();
 EOF
-    while ! psql -h "$1" -U db_owner -d db -v ON_ERROR_STOP=1 -Atq -f "$sqlfilename"; do
+    while ! psql -h "$1" -d db -v ON_ERROR_STOP=1 -Atq -f "$sqlfilename"; do
         sleep 10
     done
 }
@@ -51,7 +51,7 @@ SELECT '$matched_record'
 FROM shard_split_guard
 WHERE id=$2 AND value='$3';
 EOF
-    while ! psql -h "$1" -U db_owner -d db -v ON_ERROR_STOP=1 -Atq -f "$sqlfilename" | grep "$matched_record"; do
+    while ! psql -h "$1" -d db -v ON_ERROR_STOP=1 -Atq -f "$sqlfilename" | grep "$matched_record"; do
         sleep 10
     done
 }
@@ -134,6 +134,9 @@ function schedule_phase2_job {
 
 case $1 in
     prepare-for-draining)
+        export PGUSER="$pg_username"
+        export PGPASSWORD="$pg_password"
+
         shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
         set_sentinel "$shard_pg_cluster_name" 1 "$shard_pg_cluster_name"
 

@@ -134,7 +134,7 @@ function schedule_phase2_job {
 
 case $1 in
     prepare-for-draining)
-        export PGUSER="$pg_username"
+        export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
         export PGPASSWORD="$pg_password"
 
         shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"

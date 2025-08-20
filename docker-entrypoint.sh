@@ -74,6 +74,10 @@ function init_working_directory {
     fi
     cp -n .ssh_known_hosts /etc/ssh/ssh_known_hosts
 
+    # Configure Git identity.
+    git config user.name "splitting-job-bot"
+    git config user.email "splitting-job-bot@localhost"
+
     popd > /dev/null
 }
 

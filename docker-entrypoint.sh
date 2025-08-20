@@ -90,7 +90,8 @@ function git_reset_and_pull {
 
 function schedule_phase2_job {
     init_working_directory
-    cd "${WORKING_DIRECTORY}/$SHARD_SUBDIR"
+    shard_subdir="$SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
+    cd "${WORKING_DIRECTORY}/$shard_subdir"
 
     # This loop periodically tries to push a new commit to the Git-ops
     # repository.
@@ -119,7 +120,7 @@ function schedule_phase2_job {
         yq -i ".replicas += [{\"name\": \"$DRAINER_TASK_NAME\", \"count\": $consumers_count}]" kustomization.yaml
 
         git add -A
-        git commit -m "SPLIT: Trigger phase 2 for $SHARD_SUBDIR"
+        git commit -m "SPLIT: Trigger phase 2 for $shard_subdir"
         if git push; then
             break
         fi
@@ -133,11 +134,14 @@ function schedule_phase2_job {
 
 case $1 in
     prepare-for-draining)
-        set_sentinel "$SHARD_DB_HOST" 1 "$SHARD_DB_HOST"
+        shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
+        set_sentinel "$shard_pg_cluster_name" 1 "$shard_pg_cluster_name"
 
-        # Wait for the sentinel value to be replicated to the child databases.
-        match_sentinel "$SHARD0_DB_HOST" 1 "$SHARD_DB_HOST"
-        match_sentinel "$SHARD1_DB_HOST" 1 "$SHARD_DB_HOST"
+        # Wait for the sentinel value to be replicated to the child
+        # databases. Here, the value `1` means that the sentinel is
+        # responsible of "phase 1" of the splitting.
+        match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD0_SUFFIX" 1 "$shard_pg_cluster_name"
+        match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD1_SUFFIX" 1 "$shard_pg_cluster_name"
 
         # Make a commit to the GitOps repository.
         schedule_phase2_job

@@ -153,6 +153,12 @@ case $1 in
         # Make a commit to the GitOps repository.
         schedule_phase2_job
         ;;
+    wait-for-pods-termination)
+        while true; do
+            kubectl -n "$APP_K8S_NAMESPACE" get deployments
+            sleep 10
+        done
+        ;;
     *)
         exec "$@"
         ;;

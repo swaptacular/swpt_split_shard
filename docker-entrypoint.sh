@@ -92,14 +92,14 @@ function git_reset_and_pull {
     popd > /dev/null
 }
 
+# This function continuously tries to create and push a new commit to
+# the Git-ops repository. The created commit triggers phase 2 of the
+# splitting of the shard.
 function schedule_phase2_job {
     init_working_directory
     shard_subdir="$SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
     cd "${WORKING_DIRECTORY}/$shard_subdir"
 
-    # This loop periodically tries to push a new commit to the Git-ops
-    # repository.
-    #
     while true; do
         git_reset_and_pull
 
@@ -136,6 +136,42 @@ function schedule_phase2_job {
     done
 }
 
+function terminated_component {
+    labels="app.kubernetes.io/name=$SHARDS_APP,app.kubernetes.io/instance=$SHARDS_PREFIX$SHARD_SUFFIX,app.kubernetes.io/component=$1"
+
+    # Ensure there is exactly one deployment and it has 0 replicas.
+    [[ "$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$lables" -o jsonpath='${.items[*].spec.replicas}')" == 0 ]] || return
+
+    # Ensure a replicaset is created for the deployment.
+    revision_path='{.items[*].metadata.annotations.deployment\.kubernetes\.io/revision}'
+    revision="$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$lables" -o jsonpath='$revision_path')"
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='$revision_path' | grep -E "\b$revision\b" || return
+
+    # Ensure all replicasets have 0 running replicas.
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='{.items[*].spec.replicas}' | grep -E '^(0\s)*0$' || return
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='{.items[*].status.replicas}' | grep -E '^(0\s)*0$' || return
+
+    # Ensure there are no running pods.
+    pod_names="$(kubectl -n "$APP_K8S_NAMESPACE" get pods -l "$labels" jsonpath='{.items[*].metadata.name}')"
+    [[ "$pod_names" == "" ]]
+}
+
+# This function returns successfully if all shard components have been
+# terminated. Otherwise return a non-zero exit code.
+function terminated_components {
+    result=0
+    IFS=$' '
+    for component in $SHARDS_COMPONENTS
+    do
+        if ! terminated_component "$component"; then
+            result=1
+            break
+        fi
+    done
+    IFS=$'\n\t'
+    return "$result"
+}
+
 case $1 in
     prepare-for-draining)
         export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
@@ -150,12 +186,10 @@ case $1 in
         match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD0_SUFFIX" 1 "$shard_pg_cluster_name"
         match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD1_SUFFIX" 1 "$shard_pg_cluster_name"
 
-        # Make a commit to the GitOps repository.
         schedule_phase2_job
         ;;
     wait-for-pods-termination)
-        while true; do
-            kubectl -n "$APP_K8S_NAMESPACE" get deployments
+        while ! terminated_components; do
             sleep 10
         done
         ;;

@@ -140,21 +140,21 @@ function terminated_component {
     labels="app.kubernetes.io/name=$SHARDS_APP,app.kubernetes.io/instance=$SHARDS_PREFIX$SHARD_SUFFIX,app.kubernetes.io/component=$1"
 
     # Ensure there is exactly one deployment and it has 0 replicas.
-    [[ "$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o jsonpath='${.items[*].spec.replicas}')" == 0 ]] || return
+    [[ "$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o 'jsonpath={.items[*].spec.replicas}')" == 0 ]] || return
 
     # Ensure a replicaset is created for the deployment.
     revision_path='{.items[*].metadata.annotations.deployment\.kubernetes\.io/revision}'
-    revision="$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$lables" -o jsonpath='$revision_path')"
-    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='$revision_path' | grep -E "\b$revision\b" || return
+    revision="$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o "jsonpath=$revision_path")"
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o "jsonpath=$revision_path" | grep -E "\b$revision\b" || return
 
     # Ensure all replicasets have 0 running replicas.
-    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='{.items[*].spec.replicas}'\
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].spec.replicas}'\
         | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' || return
-    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o jsonpath='{.items[*].status.replicas}'\
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].status.replicas}'\
         | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' || return
 
     # Ensure there are no running pods.
-    pod_names="$(kubectl -n "$APP_K8S_NAMESPACE" get pods -l "$labels" jsonpath='{.items[*].metadata.name}')"
+    pod_names="$(kubectl -n "$APP_K8S_NAMESPACE" get pods -l "$labels" -o 'jsonpath={.items[*].metadata.name}')"
     [[ "$pod_names" == "" ]]
 }
 

@@ -179,6 +179,9 @@ function schedule_phase3_job {
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
 
+        # Remove the drainer process.
+        yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
+
         # TODO: Edit apiproxy.conf
         echo Editing apiproxy.conf is not implemented yet.
         return 1

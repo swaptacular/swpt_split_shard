@@ -208,13 +208,14 @@ function terminated_component {
     # Ensure a replicaset is created for the deployment.
     revision_path='{.items[*].metadata.annotations.deployment\.kubernetes\.io/revision}'
     revision="$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o "jsonpath=$revision_path")"
-    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o "jsonpath=$revision_path" | grep -E "\b$revision\b" || return
+    kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o "jsonpath=$revision_path"\
+        | grep -E "\b$revision\b" > /dev/null || return
 
     # Ensure all replicasets have 0 running replicas.
     kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].spec.replicas}'\
-        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' || return
+        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return
     kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].status.replicas}'\
-        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' || return
+        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return
 
     # Ensure there are no running pods.
     pod_names="$(kubectl -n "$APP_K8S_NAMESPACE" get pods -l "$labels" -o 'jsonpath={.items[*].metadata.name}')"
@@ -260,6 +261,7 @@ case $1 in
         while ! terminated_components; do
             sleep 10
         done
+        echo 'Shard components have been successfully terminated.'
         ;;
     prepare-for-running-new-shards)
         wait_for_sentinel 2

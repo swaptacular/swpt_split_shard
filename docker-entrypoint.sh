@@ -147,6 +147,53 @@ function schedule_phase2_job {
     done
 }
 
+# This function continuously tries to create and push a new commit to
+# the Git-ops repository. The created commit triggers phase 3 of the
+# splitting of the shard.
+function schedule_phase3_job {
+    init_working_directory
+    shard_subdir="$SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
+    cd "${WORKING_DIRECTORY}/$shard_subdir"
+
+    while true; do
+        git_reset_and_pull
+
+        # Use the "splitting-phase-3-job.yaml" resource (the scheduled
+        # job), instead of the "splitting-phase-2-job.yaml" resource
+        # (the currently executing job).
+        job_selector='.resources[] | select(. == "*/splitting-phase-2-job.yaml")'
+        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
+            echo 'ERROR: Can not locate the "splitting-phase-2-job.yaml" resource!'\
+                 'Most probably, the splitting of this shard has been manually canceled.'
+            exit 1
+        fi
+        phase2_job="$(yq "$job_selector" kustomization.yaml)"
+        phase3_job="$(echo "$phase2_job" | sed s/2-job.yaml$/3-job.yaml/)"
+        yq -i "with($job_selector; . = \"$phase3_job\")" kustomization.yaml
+
+        # Remove the "standby" section from children Postgres clusters.
+        yq -i 'with(.spec; del(.standby))' "../$SHARDS_PREFIX$SHARD0_SUFFIX/postgres-cluster.yaml"
+        yq -i 'with(.spec; del(.standby))' "../$SHARDS_PREFIX$SHARD1_SUFFIX/postgres-cluster.yaml"
+
+        # Restore the normal number of replicas for children shards.
+        yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
+        yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
+
+        # TODO: Edit apiproxy.conf
+
+        git add -A
+        git commit -m "SPLIT: Trigger phase 3 for $shard_subdir"
+        if git push; then
+            break
+        fi
+
+        # Sleep for a random interval between 0 and 32 seconds.
+        sleep_seconds=$((RANDOM / 1000))
+        echo "Will try again in $sleep_seconds seconds ..."
+        sleep $sleep_seconds
+    done
+}
+
 function terminated_component {
     labels="app.kubernetes.io/name=$SHARDS_APP,app.kubernetes.io/instance=$SHARDS_PREFIX$SHARD_SUFFIX,app.kubernetes.io/component=$1"
 
@@ -185,26 +232,33 @@ function terminated_components {
     return "$result"
 }
 
+# This function waits for the sentinel value to be replicated to the
+# child databases. The "$1" parameter specifies the "phase" of the
+# splitting (1, 2, etc.).
+function wait_for_sentinel {
+    export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
+    export PGPASSWORD="$pg_password"
+
+    shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
+    set_sentinel "$shard_pg_cluster_name" $1 "$shard_pg_cluster_name"
+
+    match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD0_SUFFIX" $1 "$shard_pg_cluster_name"
+    match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD1_SUFFIX" $1 "$shard_pg_cluster_name"
+}
+
 case $1 in
     prepare-for-draining)
-        export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
-        export PGPASSWORD="$pg_password"
-
-        shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
-        set_sentinel "$shard_pg_cluster_name" 1 "$shard_pg_cluster_name"
-
-        # Wait for the sentinel value to be replicated to the child
-        # databases. Here, the value `1` means that the sentinel is
-        # responsible of "phase 1" of the splitting.
-        match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD0_SUFFIX" 1 "$shard_pg_cluster_name"
-        match_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD1_SUFFIX" 1 "$shard_pg_cluster_name"
-
+        wait_for_sentinel 1
         schedule_phase2_job
         ;;
     wait-for-pods-termination)
         while ! terminated_components; do
             sleep 10
         done
+        ;;
+    prepare-for-running-new-shards)
+        wait_for_sentinel 2
+        schedule_phase3_job
         ;;
     *)
         exec "$@"

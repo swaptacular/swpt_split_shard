@@ -179,7 +179,7 @@ function schedule_phase3_job {
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
 
-        # Remove the drainer process.
+        # Do not start the drainer process in the parent shard.
         yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
 
         # TODO: Edit apiproxy.conf

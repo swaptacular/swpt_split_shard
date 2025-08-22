@@ -92,10 +92,21 @@ function git_reset_and_pull {
     popd > /dev/null
 }
 
+function set_replicas_selector {
+    REPLICAS_SELECTOR='.name != ""'
+    IFS=$' '
+    for workload in ${SHARDS_CRITICAL_WORKLOADS-}
+    do
+        REPLICAS_SELECTOR+=" and .name != \"$workload\""
+    done
+    IFS=$'\n\t'
+}
+
 # This function continuously tries to create and push a new commit to
 # the Git-ops repository. The created commit triggers phase 2 of the
 # splitting of the shard.
 function schedule_phase2_job {
+    set_replicas_selector
     init_working_directory
     shard_subdir="$SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
     cd "${WORKING_DIRECTORY}/$shard_subdir"
@@ -120,7 +131,7 @@ function schedule_phase2_job {
         # drainer process.
         consumers_count=$(yq ".replicas[] | select(.name == \"${CONSUMER_TASK_NAME}\") .count" kustomization.yaml)
         yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
-        yq -i '.replicas[] |= (.count = 0)' kustomization.yaml
+        yq -i "with(.replicas[] | select($REPLICAS_SELECTOR); .count |= 0)" kustomization.yaml
         yq -i ".replicas += [{\"name\": \"$DRAINER_TASK_NAME\", \"count\": $consumers_count}]" kustomization.yaml
 
         git add -A

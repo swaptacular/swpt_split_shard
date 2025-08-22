@@ -180,6 +180,8 @@ function schedule_phase3_job {
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
 
         # TODO: Edit apiproxy.conf
+        echo Editing apiproxy.conf is not implemented yet.
+        return 1
 
         git add -A
         git commit -m "SPLIT: Trigger phase 3 for $shard_subdir"

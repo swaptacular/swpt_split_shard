@@ -6,10 +6,10 @@ shard-splitting process, when deploying [Swaptacular] in [Kubernetes]
 clusters. The ultimate deliverable is a [docker image], generated from
 the project's [Dockerfile](../master/Dockerfile).
 
-This project is tightly coupled with the [Swaptacular GitOps
+**Note:** This project is tightly coupled with the [Swaptacular GitOps
 repository for deploying to Kubernetes
-clusters](https://github.com/swaptacular/swpt-k8s-config), and only
-functions meaningfully within its context.
+clusters](https://github.com/swaptacular/swpt-k8s-config) project, and
+only functions meaningfully within its context.
 
 Configuration
 -------------

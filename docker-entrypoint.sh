@@ -223,7 +223,7 @@ function schedule_phase3_job {
 
 function schedule_old_shard_removal {
     init_working_directory
-    cd "$SHARDS_SUBDIR/$SHARDS_SUBDIR"
+    cd "${WORKING_DIRECTORY}/$SHARDS_SUBDIR"
 
     while true; do
         git_reset_and_pull

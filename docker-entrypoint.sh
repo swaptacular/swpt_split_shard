@@ -221,6 +221,36 @@ function schedule_phase3_job {
     done
 }
 
+function schedule_old_shard_removal {
+    init_working_directory
+    cd "$SHARDS_SUBDIR"
+
+    while true; do
+        git_reset_and_pull
+
+        shard_dir="$(realpath $SHARDS_PREFIX$SHARD_SUFFIX)"
+        echo "Removing $shard_dir/ ..."
+        rm -rf "$shard_dir"
+
+        # Remove the "DO NOT EDIT" comments from children YAML files.
+        yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
+        yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD0_SUFFIX/postgres-cluster.yaml"
+        yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
+        yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD1_SUFFIX/postgres-cluster.yaml"
+
+        git add -A
+        git commit -m "SPLIT: Remove $SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
+        if git push; then
+            break
+        fi
+
+        # Sleep for a random interval between 0 and 32 seconds.
+        sleep_seconds=$((RANDOM / 1000))
+        echo "Will try again in $sleep_seconds seconds ..."
+        sleep $sleep_seconds
+    done
+}
+
 function terminated_component {
     labels="app.kubernetes.io/name=$SHARDS_APP,app.kubernetes.io/instance=$SHARDS_PREFIX$SHARD_SUFFIX,app.kubernetes.io/component=$1"
 
@@ -260,13 +290,16 @@ function terminated_components {
     return "$result"
 }
 
+function export_pg_authentication_envvars {
+    export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
+    export PGPASSWORD="$pg_password"
+}
+
 # This function waits for the sentinel value to be replicated to the
 # child databases. The "$1" parameter specifies the "phase" of the
 # splitting (1, 2, etc.).
 function wait_for_sentinel {
-    export PGUSER=postgres  # pg_switch_wal() requires admin privileges.
-    export PGPASSWORD="$pg_password"
-
+    export_pg_authentication_envvars
     shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
     set_sentinel "$shard_pg_cluster_name" $1 "$shard_pg_cluster_name"
 
@@ -288,6 +321,16 @@ case $1 in
     prepare-for-running-new-shards)
         wait_for_sentinel 2
         schedule_phase3_job
+        ;;
+    prepare-for-old-shard-removal)
+        # Wait until both children shards' Postgres clusters have
+        # become writable.
+        export_pg_authentication_envvars
+        shard_pg_cluster_name="$SHARDS_PG_CLUSTER_PREFIX$SHARD_SUFFIX"
+        set_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD0_SUFFIX" 3 "$shard_pg_cluster_name"
+        set_sentinel "$SHARDS_PG_CLUSTER_PREFIX$SHARD1_SUFFIX" 3 "$shard_pg_cluster_name"
+
+        schedule_old_shard_removal
         ;;
     *)
         exec "$@"

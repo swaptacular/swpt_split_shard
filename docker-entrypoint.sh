@@ -228,9 +228,15 @@ function schedule_old_shard_removal {
     while true; do
         git_reset_and_pull
 
-        shard_dir="$(realpath $SHARDS_PREFIX$SHARD_SUFFIX)"
+        shard_name="$SHARDS_PREFIX$SHARD_SUFFIX"
+        shard_dir="$(realpath "$shard_name")"
         echo "Removing $shard_dir/ ..."
         rm -rf "$shard_dir"
+
+        # Remove the old shard from to the list of included resources
+        # (also checking for a possible trailing slash).
+        yq -i "with(.resources[] | select(. == \"${shard_name}\"); del(.))" kustomization.yaml
+        yq -i "with(.resources[] | select(. == \"${shard_name}/\"); del(.))" kustomization.yaml
 
         # Remove the "DO NOT EDIT" comments from children YAML files.
         yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
@@ -239,7 +245,7 @@ function schedule_old_shard_removal {
         yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD1_SUFFIX/postgres-cluster.yaml"
 
         git add -A
-        git commit -m "SPLIT: Remove $SHARDS_SUBDIR/$SHARDS_PREFIX$SHARD_SUFFIX"
+        git commit -m "SPLIT: Remove $SHARDS_SUBDIR/$shard_name"
         if git push; then
             break
         fi

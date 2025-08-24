@@ -113,6 +113,7 @@ function schedule_phase2_job {
 
     while true; do
         git_reset_and_pull
+        echo "Editing $(realpath .)/ ..."
 
         # Use the "splitting-phase-2-job.yaml" resource (the scheduled
         # job), instead of the "splitting-phase-1-job.yaml" resource
@@ -157,6 +158,7 @@ function schedule_phase3_job {
 
     while true; do
         git_reset_and_pull
+        echo "Editing $(realpath .)/ ..."
 
         # Use the "splitting-phase-3-job.yaml" resource (the scheduled
         # job), instead of the "splitting-phase-2-job.yaml" resource
@@ -182,9 +184,29 @@ function schedule_phase3_job {
         # Do not start the drainer process in the parent shard.
         yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
 
-        # TODO: Edit apiproxy.conf
-        echo Editing apiproxy.conf is not implemented yet.
-        return 1
+        # Edit $APIPROXY_CONFIG if necessary.
+        if [[ ! -z "${APIPROXY_CONFIG-}" ]]; then
+            apiproxy_config_realpath="$(realpath $APIPROXY_CONFIG)"
+            echo "Editing $apiproxy_config_realpath ..."
+
+            escaped_key="$(echo "$SHARD_ROUTING_KEY" | sed 's/\./\\./g')"
+            forward_url="$(sed -nE "s/^\s*$escaped_key\s+(.*)$/\1/p" "$apiproxy_config_realpath")"
+            forward_url_lines=$(echo "$forward_url" | wc -l)
+            if [[ -z "$forward_url" || "$forward_url_lines" -gt 1 ]]; then
+                echo "ERROR: Invalid $apiproxy_config_realpath file. Can not find the \"$SHARD_ROUTING_KEY\" route."
+                exit 1
+            fi
+            server_hostname="$(echo "$forward_url" | sed -nE 's/http:\/\/(\w[^:/]*).*$/\1/p')"
+            port_and_path="$(echo "$forward_url" | sed -nE 's/http:\/\/\w[^:/]*(.*)$/\1/p')"
+            server_hostname_suffix=$(echo "$server_hostname" | sed -nE 's/^.*(\-[01]+)$/\1/p')
+            if [[ "$server_hostname_suffix" != "$SHARD_SUFFIX" ]]; then
+                echo "ERROR: Invalid $apiproxy_config_realpath file. Suffix mismatch: expected \"$SHARD_SUFFIX\", got \"$server_hostname_suffix\"."
+                exit 1
+            fi
+            server_hostname_prefix=$(echo "$server_hostname" | sed -nE "s/^(.*)${server_hostname_suffix}$/\1/p")
+            sed -E -i "s/^\s*$escaped_key\s+.*$/$SHARD0_ROUTING_KEY http:\/\/$server_hostname_prefix$SHARD0_SUFFIX$port_and_path\n$SHARD1_ROUTING_KEY http:\/\/$server_hostname_prefix$SHARD1_SUFFIX$port_and_path/"\
+                "$apiproxy_config_realpath"
+        fi
 
         git add -A
         git commit -m "SPLIT: Trigger phase 3 for $shard_subdir"
@@ -203,19 +225,19 @@ function terminated_component {
     labels="app.kubernetes.io/name=$SHARDS_APP,app.kubernetes.io/instance=$SHARDS_PREFIX$SHARD_SUFFIX,app.kubernetes.io/component=$1"
 
     # Ensure there is exactly one deployment and it has 0 replicas.
-    [[ "$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o 'jsonpath={.items[*].spec.replicas}')" == 0 ]] || return
+    [[ "$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o 'jsonpath={.items[*].spec.replicas}')" == 0 ]] || return 1
 
     # Ensure a replicaset is created for the deployment.
     revision_path='{.items[*].metadata.annotations.deployment\.kubernetes\.io/revision}'
     revision="$(kubectl -n "$APP_K8S_NAMESPACE" get deployments -l "$labels" -o "jsonpath=$revision_path")"
     kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o "jsonpath=$revision_path"\
-        | grep -E "\b$revision\b" > /dev/null || return
+        | grep -E "\b$revision\b" > /dev/null || return 1
 
     # Ensure all replicasets have 0 running replicas.
     kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].spec.replicas}'\
-        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return
+        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return 1
     kubectl -n "$APP_K8S_NAMESPACE" get replicasets -l "$labels" -o 'jsonpath={.items[*].status.replicas}'\
-        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return
+        | tr '\n' ' ' | grep -E '^(0\s)*0\s?$' > /dev/null || return 1
 
     # Ensure there are no running pods.
     pod_names="$(kubectl -n "$APP_K8S_NAMESPACE" get pods -l "$labels" -o 'jsonpath={.items[*].metadata.name}')"

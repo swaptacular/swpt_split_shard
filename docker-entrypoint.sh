@@ -113,17 +113,18 @@ function schedule_phase2_job {
 
     while true; do
         git_reset_and_pull
-        echo "Editing $(realpath .)/ ..."
+
+        job_selector='.resources[] | select(. == "*/splitting-phase-1-job.yaml")'
+        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
+            echo 'WARNING: Can not locate the "splitting-phase-1-job.yaml" resource!'\
+                 'Probably the job has been completed already.'
+            return 0
+        fi
+        echo "Editing $(realpath kustomization.yaml) ..."
 
         # Use the "splitting-phase-2-job.yaml" resource (the scheduled
         # job), instead of the "splitting-phase-1-job.yaml" resource
         # (the currently executing job).
-        job_selector='.resources[] | select(. == "*/splitting-phase-1-job.yaml")'
-        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
-            echo 'ERROR: Can not locate the "splitting-phase-1-job.yaml" resource!'\
-                 'Most probably, the splitting of this shard has been manually canceled.'
-            exit 1
-        fi
         phase1_job="$(yq "$job_selector" kustomization.yaml)"
         phase2_job="$(echo "$phase1_job" | sed s/1-job.yaml$/2-job.yaml/)"
         yq -i "with($job_selector; . = \"$phase2_job\")" kustomization.yaml
@@ -158,31 +159,32 @@ function schedule_phase3_job {
 
     while true; do
         git_reset_and_pull
-        echo "Editing $(realpath .)/ ..."
+
+        job_selector='.resources[] | select(. == "*/splitting-phase-2-job.yaml")'
+        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
+            echo 'WARNING: Can not locate the "splitting-phase-1-job.yaml" resource!'\
+                 'Probably the job has been completed already.'
+            return 0  # We assume that the job has been completed already.
+        fi
+        echo "Editing $(realpath kustomization.yaml) ..."
 
         # Use the "splitting-phase-3-job.yaml" resource (the scheduled
         # job), instead of the "splitting-phase-2-job.yaml" resource
         # (the currently executing job).
-        job_selector='.resources[] | select(. == "*/splitting-phase-2-job.yaml")'
-        if [[ "$(yq "$job_selector | kind" kustomization.yaml)" != scalar ]]; then
-            echo 'ERROR: Can not locate the "splitting-phase-2-job.yaml" resource!'\
-                 'Most probably, the splitting of this shard has been manually canceled.'
-            exit 1
-        fi
         phase2_job="$(yq "$job_selector" kustomization.yaml)"
         phase3_job="$(echo "$phase2_job" | sed s/2-job.yaml$/3-job.yaml/)"
         yq -i "with($job_selector; . = \"$phase3_job\")" kustomization.yaml
 
-        # Remove the "standby" section from children Postgres clusters.
+        # Do not start the drainer process in the parent shard.
+        yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
+
+        echo 'Removing the "standby" section from children Postgres clusters ...'
         yq -i 'with(.spec; del(.standby))' "../$SHARDS_PREFIX$SHARD0_SUFFIX/postgres-cluster.yaml"
         yq -i 'with(.spec; del(.standby))' "../$SHARDS_PREFIX$SHARD1_SUFFIX/postgres-cluster.yaml"
 
-        # Restore the normal number of replicas for children shards.
+        echo 'Restoring normal number of replicas for children shards ...'
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
         yq -i '.replicas = (load("kustomization.unsplit").replicas)' "../$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
-
-        # Do not start the drainer process in the parent shard.
-        yq -i "with(.replicas[] | select(.name == \"$DRAINER_TASK_NAME\"); del(.))" kustomization.yaml
 
         # Edit $APIPROXY_CONFIG if necessary.
         if [[ ! -z "${APIPROXY_CONFIG-}" ]]; then
@@ -230,15 +232,19 @@ function schedule_old_shard_removal {
 
         shard_name="$SHARDS_PREFIX$SHARD_SUFFIX"
         shard_dir="$(realpath "$shard_name")"
+        if [[ ! -e "$shard_dir" ]]; then
+            echo "WARNING: Can not locate ${shard_dir}/!"\
+                 "Probably the job has been completed already."
+            return 0
+        fi
         echo "Removing $shard_dir/ ..."
         rm -rf "$shard_dir"
 
-        # Remove the old shard from to the list of included resources
-        # (also checking for a possible trailing slash).
+        echo "Removing the old shard from $(realpath kustomization.yaml) ..."
         yq -i "with(.resources[] | select(. == \"${shard_name}\"); del(.))" kustomization.yaml
         yq -i "with(.resources[] | select(. == \"${shard_name}/\"); del(.))" kustomization.yaml
 
-        # Remove the "DO NOT EDIT" comments from children YAML files.
+        echo "Removing DO NOT EDIT comments ..."
         yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD0_SUFFIX/kustomization.yaml"
         yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD0_SUFFIX/postgres-cluster.yaml"
         yq -i '. head_comment=""' "$SHARDS_PREFIX$SHARD1_SUFFIX/kustomization.yaml"
